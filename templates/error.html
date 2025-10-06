@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Error{% endblock %}
+
+{% block content %}
+<div class="container" style="text-align: center; padding-top: 50px;">
+    <div class="box">
+        <h2>An Unexpected Error Occurred</h2>
+        <p>We're sorry, but something went wrong on our end. Our team has been notified.</p>
+        <p>Please try refreshing the page or go back to the home page.</p>
+        <a href="{{ url_for('index') }}" class="btn btn-primary" style="margin-top: 10px;">Go to Home</a>
+        
+        <!-- For debugging purposes, you can uncomment this to see the error on the page -->
+        <!-- 
+        {% if error %}
+        <div style="margin-top: 20px; padding: 10px; background-color: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; border-radius: 5px; text-align: left;">
+            <p><strong>Error Details:</strong> {{ error }}</p>
+        </div>
+        {% endif %}
+        -->
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}Download App{% endblock %}
+{% block body_class %}download-page{% endblock %}
+
+{% block content %}
+<div class="container" style="max-width: 800px; text-align: center; padding-top: 40px;">
+    <div class="box">
+        <img src="{{ url_for('static', filename='icons/icon-192.png') }}" alt="Chat App Logo" width="96" height="96" style="margin-bottom: 20px;">
+        <h2>Get the Chat App Experience</h2>
+        <p style="font-size: 1.1rem; color: #555;">Install our Progressive Web App (PWA) for the best experience on any device.</p>
+        
+        <div style="text-align: left; display: inline-block; margin: 30px 0;">
+            <ul style="list-style: '✓'; padding-left: 20px;">
+                <li style="padding-bottom: 10px;"><strong>Works Offline:</strong> Access your rooms even with a poor connection.</li>
+                <li style="padding-bottom: 10px;"><strong>Home Screen Access:</strong> Launch the app directly from your home screen, just like a native app.</li>
+                <li style="padding-bottom: 10px;"><strong>Push Notifications:</strong> Get notified of new messages even when the app is closed.</li>
+                <li style="padding-bottom: 10px;"><strong>Fast & Secure:</strong> Enjoy a faster, more integrated experience.</li>
+            </ul>
+        </div>
+
+        <div>
+            <!-- 2. Your custom install button, hidden by default. -->
+            <button id="install-pwa-btn" class="btn btn-primary" style="padding: 15px 30px; font-size: 1.2rem; display: none;">Install App</button>
+            <p id="install-msg" class="form-message" style="display: none;"></p>
+        </div>
+
+        <div id="manual-instructions" style="display: none; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;">
+            <h4>Manual Install</h4>
+            <p>If the button doesn't work, follow these steps:</p>
+            <p><strong>On Mobile:</strong> Tap the 'Share' icon in your browser, then select 'Add to Home Screen'.</p>
+            <p><strong>On Desktop:</strong> Look for an install icon (usually a computer with a down arrow) in your browser's address bar.</p>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const installButton = document.getElementById('install-pwa-btn');
+    const installMsg = document.getElementById('install-msg');
+    const manualInstructions = document.getElementById('manual-instructions');
+    let deferredPrompt;
+
+    // 4. Check if the PWA is already installed on page load.
+    if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone) {
+        installButton.style.display = 'none';
+        installMsg.textContent = 'The app is already installed on this device! 🎉';
+        installMsg.className = 'form-message success';
+        installMsg.style.display = 'block';
+        return; // Stop here if already installed.
+    }
+
+    // 1. Capture the beforeinstallprompt event.
+    window.addEventListener('beforeinstallprompt', (e) => {
+        // Prevent the default browser install prompt from showing.
+        e.preventDefault();
+        // Store the event for later use.
+        deferredPrompt = e;
+        // Show your custom install button now that we know the app is installable.
+        installButton.style.display = 'block';
+    });
+
+    // 3. Handle the button click event.
+    installButton.addEventListener('click', async () => {
+        if (!deferredPrompt) {
+            // If the prompt is not available, show manual instructions as a fallback.
+            manualInstructions.style.display = 'block';
+            installMsg.textContent = 'Direct install not available. Please follow the manual steps below.';
+            installMsg.className = 'form-message error';
+            installMsg.style.display = 'block';
+            return;
+        }
+
+        // Show the browser's install prompt.
+        deferredPrompt.prompt();
+
+        // Wait for the user to respond to the prompt.
+        const { outcome } = await deferredPrompt.userChoice;
+
+        if (outcome === 'accepted') {
+            installMsg.textContent = 'App installed successfully! Check your home screen.';
+            installMsg.className = 'form-message success';
+            installButton.style.display = 'none';
+        } else {
+            installMsg.textContent = 'Install canceled. You can install later from the browser menu.';
+            installMsg.className = 'form-message';
+        }
+        installMsg.style.display = 'block';
+
+        // The deferredPrompt can't be used again, so we clear it.
+        deferredPrompt = null;
+    });
+
+    window.addEventListener('appinstalled', () => {
+        deferredPrompt = null;
+        installButton.style.display = 'none';
+        manualInstructions.style.display = 'none';
+        installMsg.textContent = 'The app is now installed on your device! 🎉';
+        installMsg.className = 'form-message success';
+        installMsg.style.display = 'block';
+    });
+});
+</script>
+{% endblock %}

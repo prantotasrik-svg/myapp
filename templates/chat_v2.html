@@ -1,0 +1,446 @@
+{% extends "base.html" %}
+{% block title %}Chat - {{ room.name }}{% endblock %}
+{% block body_class %}chat-page{% endblock %}
+
+{% block content %}
+<div class="page-wrapper-sidebar" style="height: 100vh;">
+    <aside class="page-sidebar">
+        <div class="sidebar-header">
+            <a href="{{ url_for('index') }}" class="sidebar-back-link">← All Rooms</a>
+        </div>
+        <div class="sidebar-content">
+            <div class="current-room-title">
+                <h3>{{ room.name }}</h3>
+                <div class="room-id-container">
+                    <span>ID: {{ room.unique_id }}</span>
+                    <button id="copy-room-id-btn" class="btn-icon" title="Copy Room ID">📋</button>
+                </div>
+            </div>
+            <div class="user-list-header">
+                <h4>Users in Room</h4>
+                <div>
+                    <button id="notifications-toggle" class="btn-icon" title="Manage In-App Notifications">🔔</button>
+                    <button id="push-notifications-toggle" class="btn-icon" title="Toggle Background Push Notifications">📳</button>
+                    <button onclick="fetchAndRenderUsers()" class="btn-icon" aria-label="Refresh user list">🔄</button>
+                    <button id="notification-preferences-btn" class="btn-icon" title="Notification Preferences">⚙️</button>
+                </div>
+            </div>
+            <ul id="user-list-content" class="user-list"></ul>
+        </div>
+        <div id="notification-preferences-modal" class="modal" style="display: none;">
+    <div class="modal-content">
+        <h3>Notification Preferences</h3>
+        <div class="preference-section">
+            <label>
+                <input type="checkbox" id="global-notifications-toggle" checked>
+                Enable All Notifications
+            </label>
+        </div>
+        <div class="preference-section">
+            <h4>Room-specific Settings</h4>
+            <div id="room-preferences-list"></div>
+        </div>
+        <button onclick="document.getElementById('notification-preferences-modal').style.display='none'">
+            Close
+        </button>
+    </div>
+</div>
+    </aside>
+
+    <main class="page-main">
+        <button class="sidebar-toggle-btn" aria-label="Toggle user list">☰</button>
+        <div id="chat-loading" class="chat-messages" style="display: block;"></div>
+        <div id="chat-box" class="chat-messages" style="display: none; flex-direction: column;">
+            <button id="load-older-btn" class="load-older-btn" style="display: none;">↑ Load Older Messages</button>
+            
+            {% if messages and messages|length > 0 %}
+                {% set prev_user = none %}
+                {% for msg in messages %}
+                    {% set msg_username = msg.user if msg.user else 'Unknown' %}
+                    {% set show_username = msg_username != prev_user %}
+                    {% set is_self = msg_username == username %}
+                    <div class="message {{ 'self' if is_self else 'other' }} {% if not show_username %}consecutive{% endif %}" data-user="{{ msg_username }}" data-timestamp="{{ msg.timestamp }}">
+                        <div class="message-bubble">
+                            <p class="message-content">
+                                {% if not is_self and show_username %}<strong class="username-prefix">{{ msg_username }}:</strong>{% endif %}{{ msg.message }}
+                            </p>
+                        </div>
+                    </div>
+                    {% set prev_user = msg_username %}
+                {% endfor %}
+            {% else %}
+                <div class="message-placeholder">No messages yet. Start the conversation!</div>
+            {% endif %}
+        </div>
+        <form id="chat-form" class="message-form">
+            <input type="text" id="message" class="message-input" placeholder="Type a message..." maxlength="500" autocomplete="off">
+            <button type="submit" class="send-btn" title="Send">➤</button>
+        </form>
+    </main>
+</div>
+<audio id="notification-sound" src="{{ url_for('static', filename='sounds/notification.mp3') }}" preload="auto"></audio>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.4/socket.io.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.15.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.15.0/firebase-messaging-compat.js"></script>
+<script>
+// --- FINAL, STABLE JAVASCRIPT ---
+const roomName = {{ room.name|tojson }};
+const roomUniqueId = {{ room.unique_id|tojson }};
+const currentUser = {{ username|tojson if username else 'null' }};
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDJb0OzEmgxIGkqFsPnhRv2Tq33sNzHuRQ",
+  authDomain: "tasrikchat.firebaseapp.com",
+  projectId: "tasrikchat",
+  storageBucket: "tasrikchat.firebasestorage.app",
+  messagingSenderId: "425161922639",
+  appId: "1:425161922639:web:f362581de0231ae345723a",
+  measurementId: "G-6W5Y1SHNTQ"
+};
+const VAPID_KEY = "BLDznvhjyhIghdhoQfKXvdvyUqgT_G1eJMVSq4VE0wHE9uo1HtkfEPFTrMRUpcG7WaMFWdU28kbsRkgdbLiAS2Q";
+
+firebase.initializeApp(firebaseConfig);
+const messaging = firebase.messaging();
+const socket = io({ transports: ['websocket', 'polling'] });
+
+const chatBox = document.getElementById('chat-box');
+const form = document.getElementById('chat-form');
+const messageInput = document.getElementById('message');
+const pushNotificationsToggle = document.getElementById('push-notifications-toggle');
+const loadOlderBtn = document.getElementById('load-older-btn');
+const notificationsToggle = document.getElementById('notifications-toggle');
+const notificationSound = document.getElementById('notification-sound');
+let currentToken = '';
+let isFetchingOlder = false;
+
+// --- In-App Notification Logic (Unchanged) ---
+let inAppNotificationsEnabled = localStorage.getItem('inAppNotificationsEnabled') !== 'false';
+function updateInAppNotificationButton() {
+    notificationsToggle.innerHTML = inAppNotificationsEnabled ? '🔔' : '🔕';
+    notificationsToggle.title = `In-app sound notifications are ${inAppNotificationsEnabled ? 'enabled' : 'disabled'}. Click to toggle.`;
+}
+
+notificationsToggle.addEventListener('click', () => {
+    inAppNotificationsEnabled = !inAppNotificationsEnabled;
+    localStorage.setItem('inAppNotificationsEnabled', inAppNotificationsEnabled);
+    updateInAppNotificationButton();
+    alert(`In-app sound notifications ${inAppNotificationsEnabled ? 'enabled' : 'disabled'}.`);
+});
+
+function playNotificationSound() {
+    if (inAppNotificationsEnabled) {
+        notificationSound.currentTime = 0;
+        notificationSound.play().catch(e => console.log("Could not play sound:", e));
+    }
+}
+
+// --- Global Push Notification Logic (Unchanged) ---
+async function updatePushButtonState() {
+    try {
+        const token = await messaging.getToken();
+        currentToken = token || '';
+        if (currentToken) {
+            pushNotificationsToggle.dataset.subscribed = 'true';
+            pushNotificationsToggle.innerHTML = '📳';
+            pushNotificationsToggle.title = 'Push notifications are enabled. Click to disable.';
+        } else {
+            pushNotificationsToggle.dataset.subscribed = 'false';
+            pushNotificationsToggle.innerHTML = '🔕';
+            pushNotificationsToggle.title = 'Push notifications are disabled. Click to enable.';
+        }
+    } catch (err) {
+        console.error('Could not get push token on load.', err);
+        pushNotificationsToggle.dataset.subscribed = 'false';
+        pushNotificationsToggle.innerHTML = '🔕';
+        pushNotificationsToggle.title = 'Could not get push permission.';
+    }
+}
+
+pushNotificationsToggle.addEventListener('click', async () => {
+    const isSubscribed = pushNotificationsToggle.dataset.subscribed === 'true';
+    if (isSubscribed) {
+        try {
+            await messaging.deleteToken();
+            await fetch('/api/unsubscribe_push', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token: currentToken })
+            });
+            currentToken = '';
+            alert('Push notifications disabled.');
+        } catch (err) { console.error('Error unsubscribing:', err); alert('Failed to disable push notifications.'); }
+    } else {
+        try {
+            const permission = await Notification.requestPermission();
+            if (permission === 'granted') {
+                const token = await messaging.getToken({ vapidKey: VAPID_KEY });
+                if (token) {
+                    await fetch('/api/subscribe_push', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ token: token })
+                    });
+                    currentToken = token;
+                    alert('Push notifications enabled!');
+                }
+            } else { alert('Notification permission was denied.'); }
+        } catch (err) { console.error('An error occurred while subscribing:', err); alert('Failed to enable push notifications.'); }
+    }
+    updatePushButtonState();
+});
+
+// --- Chat & Socket.IO Logic ---
+function scrollToBottom(smooth = true) {
+    chatBox.scrollTo({ top: chatBox.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+}
+
+function appendMessage(msg) {
+    if (!msg || !msg.user || !msg.message) return;
+    const isSelf = msg.user === currentUser;
+    const lastMessage = chatBox.lastElementChild;
+    const isConsecutive = lastMessage && lastMessage.dataset.user === msg.user;
+    const div = document.createElement('div');
+    div.className = `message ${isSelf ? 'self' : 'other'} ${isConsecutive ? 'consecutive' : ''}`;
+    div.dataset.user = msg.user;
+    div.innerHTML = `<div class="message-bubble"><p class="message-content">${!isSelf && !isConsecutive ? `<strong class="username-prefix">${msg.user}:</strong>` : ''}${msg.message}</p></div>`;
+    chatBox.appendChild(div);
+    scrollToBottom(true);
+}
+async function loadNotificationPreferences() {
+    try {
+        const response = await fetch('/api/notification_preferences');
+        const data = await response.json();
+        
+        // Update global toggle
+        document.getElementById('global-notifications-toggle').checked = data.global;
+        
+        // Update room-specific preferences
+        const roomList = document.getElementById('room-preferences-list');
+        roomList.innerHTML = '';
+        
+        // You'll need to get the user's rooms first
+        const roomsResponse = await fetch('/api/user_rooms');
+        const userRooms = await roomsResponse.json();
+        
+        userRooms.forEach(room => {
+            const isEnabled = data.rooms[room.unique_id] !== false;
+            const div = document.createElement('div');
+            div.className = 'room-preference';
+            div.innerHTML = `
+                <label>
+                    <input type="checkbox" data-room="${room.unique_id}" ${isEnabled ? 'checked' : ''}>
+                    ${room.name}
+                </label>
+            `;
+            roomList.appendChild(div);
+        });
+        
+        // Add event listeners to room toggles
+        document.querySelectorAll('#room-preferences-list input[type="checkbox"]').forEach(checkbox => {
+            checkbox.addEventListener('change', (e) => {
+                updateRoomNotificationPreference(e.target.dataset.room, e.target.checked);
+            });
+        });
+    } catch (error) {
+        console.error('Error loading notification preferences:', error);
+    }
+}
+
+async function updateRoomNotificationPreference(roomId, enabled) {
+    try {
+        const response = await fetch('/api/notification_preferences', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({room_id: roomId, enabled: enabled})
+        });
+        const result = await response.json();
+        if (!result.success) {
+            alert('Failed to update preference');
+        }
+    } catch (error) {
+        console.error('Error updating notification preference:', error);
+        alert('Failed to update preference');
+    }
+}
+
+async function updateGlobalNotificationPreference(enabled) {
+    try {
+        const response = await fetch('/api/notification_preferences', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({enabled: enabled})
+        });
+        const result = await response.json();
+        if (!result.success) {
+            alert('Failed to update global preference');
+        }
+    } catch (error) {
+        console.error('Error updating global notification preference:', error);
+        alert('Failed to update global preference');
+    }
+}
+
+// Add event listener for the preferences button
+document.getElementById('notification-preferences-btn').addEventListener('click', () => {
+    document.getElementById('notification-preferences-modal').style.display = 'block';
+    loadNotificationPreferences();
+});
+
+// Add event listener for global toggle
+document.getElementById('global-notifications-toggle').addEventListener('change', (e) => {
+    updateGlobalNotificationPreference(e.target.checked);
+});
+async function loadOlderMessages() {
+    if (isFetchingOlder) return;
+    const firstMessage = chatBox.querySelector('.message[data-timestamp]');
+    if (!firstMessage) { loadOlderBtn.style.display = 'none'; return; }
+    isFetchingOlder = true;
+    loadOlderBtn.textContent = 'Loading...';
+    const oldestTimestamp = firstMessage.dataset.timestamp;
+    try {
+        const res = await fetch(`/api/chat/${roomUniqueId}/older?before=${oldestTimestamp}`);
+        const messages = await res.json();
+        if (messages && messages.length > 0) {
+            const oldScrollHeight = chatBox.scrollHeight;
+            const oldScrollTop = chatBox.scrollTop;
+            const fragment = document.createDocumentFragment();
+            for (let i = messages.length - 1; i >= 0; i--) {
+                const msg = messages[i];
+                const isSelf = msg.user === currentUser;
+                const lastMessageInFragment = fragment.lastElementChild;
+                const isConsecutive = lastMessageInFragment && lastMessageInFragment.dataset.user === msg.user;
+                const div = document.createElement('div');
+                div.className = `message ${isSelf ? 'self' : 'other'} ${isConsecutive ? 'consecutive' : ''}`;
+                div.dataset.user = msg.user;
+                div.dataset.timestamp = msg.timestamp;
+                div.innerHTML = `<div class="message-bubble"><p class="message-content">${!isSelf && !isConsecutive ? `<strong class="username-prefix">${msg.user}:</strong>` : ''}${msg.message}</p></div>`;
+                fragment.appendChild(div);
+            }
+            const lastMessageInBatch = messages[0];
+            if (lastMessageInBatch && lastMessageInBatch.user === firstMessage.dataset.user) {
+                firstMessage.classList.add('consecutive');
+                const usernamePrefix = firstMessage.querySelector('.username-prefix');
+                if (usernamePrefix) usernamePrefix.remove();
+            }
+            chatBox.prepend(fragment);
+            chatBox.scrollTop = chatBox.scrollHeight - oldScrollHeight + oldScrollTop;
+        } else {
+            loadOlderBtn.style.display = 'none';
+        }
+    } catch (err) {
+        console.error("Failed to load older messages:", err);
+        loadOlderBtn.textContent = 'Error. Try again.';
+    } finally {
+        isFetchingOlder = false;
+        if (loadOlderBtn.textContent === 'Loading...') {
+            loadOlderBtn.textContent = '↑ Load Older Messages';
+        }
+    }
+}
+
+async function fetchAndRenderUsers() {
+    try {
+        const res = await fetch(`/api/rooms/${roomUniqueId}/users`);
+        if (!res.ok) throw new Error(`Server responded with ${res.status}`);
+        const users = await res.json();
+        const userListContent = document.getElementById('user-list-content');
+        userListContent.innerHTML = users.map(u => `<li class="user-item"><a href="/user/${u.username}" class="user-profile-link">${u.username}${u.is_verified ? ' <span class="verified-tick">✓</span>' : ''}</a><span class="status-dot ${u.active_in_room ? 'online' : 'offline'}"></span></li>`).join('');
+    } catch (e) { console.error('Fetch users error:', e); }
+}
+
+form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const message = messageInput.value.trim();
+    if (message && currentUser) {
+        socket.emit('send_message', { room: roomUniqueId, user: currentUser, message: message });
+        messageInput.value = '';
+        messageInput.focus();
+    }
+});
+
+// --- Socket.IO Connection Events (FIXED) ---
+socket.on('connect', () => {
+    console.log('Socket connected. Server will identify via session. Joining room...');
+    // The 'identify' event is no longer needed.
+    socket.emit('join', { room: roomUniqueId });
+});
+
+socket.on('reconnect', () => {
+    console.log('Socket reconnected. Server will re-identify. Re-joining room...');
+    // The 'identify' event is no longer needed.
+    socket.emit('join', { room: roomUniqueId });
+});
+
+socket.on('disconnect', (reason) => {
+    console.warn(`Socket disconnected: ${reason}`);
+});
+
+socket.on('receive_message', (msg) => {
+    if (msg.room === roomUniqueId) {
+        appendMessage(msg);
+        if (msg.user !== currentUser && document.hidden) {
+            playNotificationSound();
+        }
+    }
+});
+
+socket.on('user_list_updated', () => {
+    console.log('Received user list update signal from server.');
+    fetchAndRenderUsers();
+});
+
+messaging.onMessage((payload) => {
+    console.log('Message received while app is in foreground: ', payload);
+    playNotificationSound();
+});
+
+// --- PAGE LOAD SEQUENCE ---
+document.addEventListener('DOMContentLoaded', () => {
+    const sidebarToggleBtn = document.querySelector('.sidebar-toggle-btn');
+    const sidebar = document.querySelector('.page-sidebar');
+    const copyRoomIdBtn = document.getElementById('copy-room-id-btn');
+
+    if (sidebarToggleBtn && sidebar) {
+        sidebarToggleBtn.addEventListener('click', () => {
+            sidebar.classList.toggle('sidebar-visible');
+        });
+    }
+    if (copyRoomIdBtn) {
+        copyRoomIdBtn.addEventListener('click', () => {
+            navigator.clipboard.writeText(roomUniqueId).then(() => {
+                alert('Room ID copied to clipboard!');
+            }).catch(err => { console.error('Failed to copy Room ID: ', err); });
+        });
+    }
+    if (loadOlderBtn) {
+        loadOlderBtn.addEventListener('click', loadOlderMessages);
+    }
+
+    document.getElementById('chat-loading').style.display = 'none';
+    chatBox.style.display = 'flex';
+    scrollToBottom(false);
+    fetchAndRenderUsers();
+    if (chatBox.querySelector('.message[data-timestamp]')) {
+        loadOlderBtn.style.display = 'block';
+    }
+
+    updateInAppNotificationButton();
+    fetchAndRenderUsers();
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js')
+            .then(reg => reg.ready)
+            .then(() => {
+                console.log('Service Worker is active.');
+                updatePushButtonState();
+            })
+            .catch(err => console.error('Service Worker setup failed:', err));
+    } else {
+        console.warn('Service workers are not supported.');
+        pushNotificationsToggle.style.display = 'none';
+    }
+});
+</script>
+{% endblock %}
