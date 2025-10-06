@@ -3,14 +3,11 @@ Flask==2.3.3
 Flask-SocketIO==5.3.6
 python-dotenv==1.0.0
 Werkzeug==2.3.7
-gevent==23.9.1
-gevent-websocket==0.10.1
+gevent==24.2.1  # UPDATED to latest stable
+gevent-websocket==0.10.1 # This version is usually fine, but let's keep it explicit
 
 # Production WSGI server
 gunicorn==21.2.0
-
-# Environment variables
-python-dotenv==1.0.0
 
 # Firebase Cloud Messaging (FCM) for Notifications
 firebase-admin==6.5.0
