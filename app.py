@@ -20,20 +20,34 @@ import firebase_admin
 from firebase_admin import credentials, messaging
 import requests
 from requests.adapters import HTTPAdapter
+import base64
 
+# Load environment variables from .env file
 load_dotenv()
 
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+
+# Create a custom HTTP session for Firebase Admin
 firebase_session = requests.Session()
 adapter = HTTPAdapter(pool_connections=100, pool_maxsize=100)
 firebase_session.mount('https://', adapter)
 
+# Initialize Firebase Admin SDK using base64-encoded credentials from environment
 try:
-    cred = credentials.Certificate("serviceAccountKey.json") 
-    firebase_admin.initialize_app(cred, {'http_client': firebase_session})
+    b64_creds = os.environ.get("FIREBASE_CREDENTIALS_B64")
+    if not b64_creds:
+        raise ValueError("Missing FIREBASE_CREDENTIALS_B64 environment variable")
+
+    decoded = base64.b64decode(b64_creds).decode("utf-8")
+    cred_data = json.loads(decoded)
+
+    cred = credentials.Certificate(cred_data)
+    firebase_admin.initialize_app(cred, {"http_client": firebase_session})
     logging.info("Firebase Admin SDK initialized successfully with custom HTTP session.")
+
 except Exception as e:
     logging.error(f"Failed to initialize Firebase Admin SDK: {e}")
-
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logging.getLogger('socketio').setLevel(logging.WARNING)
 logging.getLogger('engineio').setLevel(logging.WARNING)
@@ -1073,3 +1087,4 @@ def handle_message(data):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     socketio.run(app, host="0.0.0.0", port=port, debug=False, allow_unsafe_werkzeug=True)
+
